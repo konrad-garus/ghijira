@@ -19,12 +19,12 @@
 
 (def UNNAMED "UNNAMED")
 
-(def ^:dynamic *config-id*)
-(def ^:dynamic *ghuser*)
-(def ^:dynamic *ghproject*)
-(def ^:dynamic *auth*)
-(def ^:dynamic *maxcmt*)
-(def ^:dynamic *user-map*)
+;(def ^:dynamic *config-id*)
+;(def ^:dynamic *ghuser*)
+;(def ^:dynamic *ghproject*)
+;(def ^:dynamic *auth*)
+;(def ^:dynamic *maxcmt*)
+;(def ^:dynamic *user-map*)
 (def ^:dynamic *jira-project*)
 (def ^:dynamic *git-base-url*)
 
@@ -38,24 +38,24 @@
 
 ;; Loading issues from GH
 
-(defn get-issues [state]
-  (issues/issues *ghuser* *ghproject* {:auth *auth* :all-pages true :state state}))
+(defn get-issues [{:keys [ghuser ghproject auth]} state]
+  (issues/issues ghuser ghproject {:auth auth :all-pages true :state state}))
 
-(defn get-all-issues [] 
-  (concat (get-issues "open")
-          (get-issues "closed")))
+(defn get-all-issues [config] 
+  (concat (get-issues config "open")
+          (get-issues config "closed")))
 
-(defn assoc-comments-and-events [issue]
+(defn assoc-comments-and-events [{:keys [ghuser ghproject auth]} issue]
   (println (str "Fetching data for #" (:number issue)))
   (assoc issue 
-         :comment-contents (issues/issue-comments *ghuser* *ghproject* (:number issue) {:auth *auth*})
-         :event-contents (issues/issue-events *ghuser* *ghproject* (:number issue) {:auth *auth*})))
+         :comment-contents (issues/issue-comments ghuser ghproject (:number issue) {:auth auth})
+         :event-contents (issues/issue-events ghuser ghproject (:number issue) {:auth auth})))
 
-(defn issues-with-extra []
-  (map assoc-comments-and-events (get-all-issues)))
+(defn issues-with-extra [config]
+  (map (partial assoc-comments-and-events config) (get-all-issues config)))
 
 ; Cache for 30 minutes, for easier development at the REPL
-(def issues-with-extra-cached (memoize/memo-ttl issues-with-extra (* 30 60 1000)))
+;(def issues-with-extra-cached (memoize/memo-ttl issues-with-extra (* 30 60 1000)))
 
 ;; Validation / preprocessing
 
@@ -76,7 +76,7 @@
 
 ;; Export to JIRA
 
-(defn columns [] 
+(defn columns [{:keys [maxcmt]}] 
   (concat
     ["Issue Id",
      "Summary",
@@ -89,7 +89,7 @@
      "Resolution",
      "Reporter",
      "Labels"]
-    (repeat *maxcmt* "Comments") ))
+    (repeat maxcmt "Comments") ))
 
 ; Date-time format used by the Github Issues API
 (def gh-formatter (tf/formatters :date-time-no-ms))
@@ -102,10 +102,10 @@
 (defn gh2jira [date]
   (tf/unparse jira-formatter (tf/parse gh-formatter date)))
 
-(defn get-user [issue]
+(defn get-user [{:keys user-map} issue]
   (let [u (or (:login (:user issue))
               (:login (:actor issue)))]
-    (get *user-map* u u)))
+    (get user-map u u)))
 
 (defn cross-item-ref-replace
   ""
@@ -124,11 +124,11 @@
     (:event c) (str (:event c))
     :else  (cross-item-ref-replace (:body c) *jira-project*)))
 
-(defn format-comment [c]
+(defn format-comment [config c]
   (let [created-at (tf/parse gh-formatter (:created_at c))
         comment-text (comment-or-event-to-text c)]
     (str "Comment:"
-         (get-user c)
+         (get-user config c)
          ":"
          (tf/unparse jira-formatter created-at)
          ":" \newline \newline
@@ -145,11 +145,11 @@
 ;(map (juxt :created_at (comp :login :actor) :event :commit_id) (:event-contents x))
 
 
-(defn issue2row [issue]
+(defn issue2row [{:keys [maxcmt]} issue]
   (let [filtered-events (remove #(= "subscribed" (:event %)) (:event-contents issue))
         all-comments (concat (:comment-contents issue)
                              filtered-events)
-        trimmed-comments (take *maxcmt* 
+        trimmed-comments (take maxcmt 
                                (sort-by :created_at all-comments))
         milestone (:title (:milestone issue))
         milestone-dashes (str/replace (or milestone "") \space \-)]
@@ -166,18 +166,18 @@
         (if (= "closed" (:state issue)) "Fixed" "Unresolved")
         (get-user issue)
         (get-labels issue))
-      (map format-comment trimmed-comments)
-      (repeat (- *maxcmt* (count trimmed-comments)) "")    ; pad out field count  
+      (map format-comment  trimmed-comments)
+      (repeat (- maxcmt (count trimmed-comments)) "")    ; pad out field count  
     )))
 
-(defn export-issues-to-file [issues filename]
+(defn export-issues-to-file [config issues filename]
   (let [issues-in-order (sort-by :number issues)]
     (with-open [out-file (io/writer filename)]
       (csv/write-csv 
         out-file
         (concat
-          [(columns)] 
-          (map issue2row issues-in-order))))))
+          [(columns config)] 
+          (map (partial issue2row config) issues-in-order))))))
 
 ;; Main
 
@@ -194,18 +194,18 @@
   [config-id]
     (let [config (load-config config-id)]
     (binding [
-            *config-id* config-id
-            *ghuser* (:ghuser config)
-            *ghproject* (:ghproject config)
-            *auth* (:auth config)
-            *maxcmt* (:maxcmt config)
-            *user-map* (:user-map config)
+            ;*config-id* config-id
+      ;      *ghuser* (:ghuser config)
+      ;      *ghproject* (:ghproject config)
+            ;*auth* (:auth config)
+            ;*maxcmt* (:maxcmt config)
+            ;*user-map* (:user-map config)
             *jira-project* (:jira-project config)
             *git-base-url* (:git-base-url config)
             ]
-    (let [issues (issues-with-extra-cached)]
+    (let [issues (issues-with-extra config)]
       (warn-missing-issues issues)
-      (export-issues-to-file issues (str "JIRA-" *config-id* ".csv"))))))
+      (export-issues-to-file config issues (str "JIRA-" config-id ".csv"))))))
 
 (defn -main [& args]
   (when (empty? args)
