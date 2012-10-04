@@ -153,7 +153,6 @@
         (gh2jira (:created_at issue))
         (gh2jira (:updated_at issue))
         "Task" ; issue type
-        (get-milestone issue)
         milestone-dashes
         (if (= "closed" (:state issue)) "Closed" "Open")
         (if (= "closed" (:state issue)) "Fixed" "Unresolved")
